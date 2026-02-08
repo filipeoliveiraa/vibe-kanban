@@ -154,6 +154,7 @@
     "backToActive": "Back to Active",
     "noArchived": "No archived workspaces",
     "noWorkspaces": "No workspaces",
+    "newWorkspace": "New workspace",
     "needsAttention": "Needs Attention",
     "idle": "Idle",
     "running": "Running",
@@ -352,6 +353,9 @@
     "tags": "Tags",
     "files": "Files",
     "commands": "Commands",
+    "chooseRepo": "Choose repo",
+    "selectedRepo": "Selected repo: {{repoName}}",
+    "missingRepo": "Selected repo is no longer available.",
     "noTagsOrFiles": "No tags or files found",
     "noCommands": "No commands available for this agent."
   },
@@ -375,6 +379,7 @@
     "enterCommentPlaceholder": "Enter your comment here...",
     "subIssues": "Sub-issues",
     "noSubIssues": "No sub-issues",
+    "markIndependentIssue": "Mark as independent issue",
     "parentIssue": "Parent",
     "subIssueIndicator": "↳",
     "showSubIssues": "Show sub-issues",
@@ -386,6 +391,19 @@
       "title": "Sign in required",
       "description": "Please sign in to view this project.",
       "action": "Sign in"
+    }
+  },
+  "createMode": {
+    "headings": {
+      "repoStep": "Which repositories would you like to work on?",
+      "chatStep": "What would you like to work on?"
+    },
+    "repoPicker": {
+      "actions": {
+        "recent": "Recent",
+        "browse": "Browse",
+        "create": "Create"
+      }
     }
   },
   "syncError": {

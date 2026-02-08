@@ -5,8 +5,13 @@ import {
   DotsThreeIcon,
   LinkBreakIcon,
   TrashIcon,
+  PlayIcon,
+  HandIcon,
+  TriangleIcon,
+  CircleIcon,
 } from '@phosphor-icons/react';
 import { UserAvatar } from '@/components/ui-new/primitives/UserAvatar';
+import { RunningDots } from '@/components/ui-new/primitives/RunningDots';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,6 +38,12 @@ export interface WorkspaceWithStats {
   owner: OrganizationMemberWithProfile | null;
   updatedAt: string;
   isOwnedByCurrentUser: boolean;
+  isRunning?: boolean;
+  hasPendingApproval?: boolean;
+  hasRunningDevServer?: boolean;
+  hasUnseenActivity?: boolean;
+  latestProcessCompletedAt?: string;
+  latestProcessStatus?: 'running' | 'completed' | 'failed' | 'killed';
 }
 
 export interface IssueWorkspaceCardProps {
@@ -40,27 +51,43 @@ export interface IssueWorkspaceCardProps {
   onClick?: () => void;
   onUnlink?: () => void;
   onDelete?: () => void;
+  showOwner?: boolean;
+  showStatusBadge?: boolean;
+  showNoPrText?: boolean;
   className?: string;
 }
 
-export function IssueWorkspaceCard({
-  workspace,
-  onClick,
-  onUnlink,
-  onDelete,
-  className,
-}: IssueWorkspaceCardProps) {
-  const { t } = useTranslation('common');
-  const timeAgo = getTimeAgo(workspace.updatedAt);
+export interface IssueWorkspaceCreateCardProps {
+  onClick?: () => void;
+  className?: string;
+}
 
+interface IssueWorkspaceCardContainerProps {
+  onClick?: () => void;
+  className?: string;
+  children: React.ReactNode;
+}
+
+function IssueWorkspaceCardContainer({
+  onClick,
+  className,
+  children,
+}: IssueWorkspaceCardContainerProps) {
   return (
     <div
       className={cn(
-        'flex flex-col gap-half p-base bg-panel rounded-sm border border-transparent hover:border-border transition-colors',
-        onClick && 'cursor-pointer',
+        'flex flex-col gap-half p-base bg-panel rounded-sm transition-all duration-150',
+        onClick && 'cursor-pointer hover:bg-secondary/70',
         className
       )}
-      onClick={onClick}
+      onClick={
+        onClick
+          ? (e) => {
+              e.stopPropagation();
+              onClick();
+            }
+          : undefined
+      }
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
       onKeyDown={
@@ -68,34 +95,71 @@ export function IssueWorkspaceCard({
           ? (e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
+                e.stopPropagation();
                 onClick();
               }
             }
           : undefined
       }
     >
+      {children}
+    </div>
+  );
+}
+
+export function IssueWorkspaceCard({
+  workspace,
+  onClick,
+  onUnlink,
+  onDelete,
+  showOwner = true,
+  showStatusBadge = true,
+  showNoPrText = true,
+  className,
+}: IssueWorkspaceCardProps) {
+  const { t } = useTranslation('common');
+  const timeAgo = getTimeAgo(
+    workspace.latestProcessCompletedAt ?? workspace.updatedAt
+  );
+  const isRunning = workspace.isRunning ?? false;
+  const hasPendingApproval = workspace.hasPendingApproval ?? false;
+  const hasRunningDevServer = workspace.hasRunningDevServer ?? false;
+  const hasUnseenActivity = workspace.hasUnseenActivity ?? false;
+  const isFailed =
+    workspace.latestProcessStatus === 'failed' ||
+    workspace.latestProcessStatus === 'killed';
+  const hasLiveStatusIndicator =
+    hasRunningDevServer ||
+    isFailed ||
+    isRunning ||
+    (hasUnseenActivity && !isRunning);
+
+  return (
+    <IssueWorkspaceCardContainer onClick={onClick} className={className}>
       {/* Row 1: Status badge + Name (left), Owner avatar + menu (right) */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-half min-w-0">
-          <span
-            className={cn(
-              'px-1.5 py-0.5 rounded text-xs font-medium shrink-0',
-              workspace.archived
-                ? 'bg-secondary text-low'
-                : 'bg-success/10 text-success'
-            )}
-          >
-            {workspace.archived
-              ? t('workspaces.archived')
-              : t('workspaces.active')}
-          </span>
+          {showStatusBadge && (
+            <span
+              className={cn(
+                'px-1.5 py-0.5 rounded text-xs font-medium shrink-0',
+                workspace.archived
+                  ? 'bg-secondary text-low'
+                  : 'bg-success/10 text-success'
+              )}
+            >
+              {workspace.archived
+                ? t('workspaces.archived')
+                : t('workspaces.active')}
+            </span>
+          )}
           {workspace.name && (
             <span className="text-sm text-high truncate">{workspace.name}</span>
           )}
         </div>
 
         <div className="flex items-center gap-half">
-          {workspace.owner && (
+          {showOwner && workspace.owner && (
             <UserAvatar
               user={workspace.owner}
               className="h-5 w-5 text-[10px] border-2 border-panel"
@@ -145,9 +209,44 @@ export function IssueWorkspaceCard({
         </div>
       </div>
 
-      {/* Row 2: Stats (left), PR buttons (right) */}
+      {/* Row 2: Live status + stats (left), PR buttons (right) */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-half text-sm text-low">
+        <div className="flex items-center gap-half text-sm text-low min-w-0">
+          <div className="flex items-center gap-half shrink-0">
+            {hasRunningDevServer && (
+              <PlayIcon
+                className="size-icon-xs text-brand shrink-0"
+                weight="fill"
+              />
+            )}
+
+            {!isRunning && isFailed && (
+              <TriangleIcon
+                className="size-icon-xs text-error shrink-0"
+                weight="fill"
+              />
+            )}
+
+            {isRunning &&
+              (hasPendingApproval ? (
+                <HandIcon
+                  className="size-icon-xs text-brand shrink-0"
+                  weight="fill"
+                />
+              ) : (
+                <RunningDots />
+              ))}
+
+            {hasUnseenActivity && !isRunning && !isFailed && (
+              <CircleIcon
+                className="size-icon-xs text-brand shrink-0"
+                weight="fill"
+              />
+            )}
+          </div>
+
+          {hasLiveStatusIndicator && <span className="text-low/50">·</span>}
+
           <span>{timeAgo}</span>
           {workspace.filesChanged > 0 && (
             <>
@@ -195,12 +294,47 @@ export function IssueWorkspaceCard({
                 <span>#{pr.number}</span>
               </a>
             ))
-          ) : (
+          ) : showNoPrText ? (
             <span className="text-xs text-low">{t('kanban.noPrCreated')}</span>
-          )}
+          ) : null}
         </div>
       </div>
-    </div>
+    </IssueWorkspaceCardContainer>
+  );
+}
+
+export function IssueWorkspaceCreateCard({
+  onClick,
+  className,
+}: IssueWorkspaceCreateCardProps) {
+  const { t } = useTranslation('common');
+
+  return (
+    <IssueWorkspaceCardContainer
+      className={cn('border border-dashed border-border', className)}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-half min-w-0">
+          <span className="px-1.5 py-0.5 rounded text-xs font-medium shrink-0 bg-secondary text-low">
+            {t('workspaces.draft')}
+          </span>
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between gap-base">
+        <span className="text-sm text-low truncate">
+          {t('workspaces.newWorkspace')}
+        </span>
+        <button
+          type="button"
+          onClick={onClick}
+          disabled={!onClick}
+          className="shrink-0 rounded-sm px-base py-half text-cta h-cta flex items-center bg-brand text-on-brand hover:bg-brand-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {t('create', 'Create')}
+        </button>
+      </div>
+    </IssueWorkspaceCardContainer>
   );
 }
 

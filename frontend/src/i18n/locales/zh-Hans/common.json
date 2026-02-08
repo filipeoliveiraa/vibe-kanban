@@ -154,6 +154,7 @@
     "backToActive": "返回活跃",
     "noArchived": "没有已归档的工作区",
     "noWorkspaces": "没有工作区",
+    "newWorkspace": "新工作区",
     "needsAttention": "需要注意",
     "idle": "空闲",
     "running": "运行中",
@@ -352,6 +353,9 @@
     "tags": "标签",
     "files": "文件",
     "commands": "命令",
+    "chooseRepo": "选择仓库",
+    "selectedRepo": "已选择仓库：{{repoName}}",
+    "missingRepo": "所选仓库已不可用。",
     "noTagsOrFiles": "未找到标签或文件",
     "noCommands": "此代理没有可用的命令。"
   },
@@ -375,6 +379,7 @@
     "enterCommentPlaceholder": "在此输入评论...",
     "subIssues": "子任务",
     "noSubIssues": "无子任务",
+    "markIndependentIssue": "标记为独立问题",
     "parentIssue": "父级",
     "subIssueIndicator": "↳",
     "showSubIssues": "显示子任务",
@@ -386,6 +391,19 @@
       "title": "需要登录",
       "description": "请登录以查看此项目。",
       "action": "登录"
+    }
+  },
+  "createMode": {
+    "headings": {
+      "repoStep": "你想在哪些仓库上工作？",
+      "chatStep": "你想做什么工作？"
+    },
+    "repoPicker": {
+      "actions": {
+        "recent": "最近",
+        "browse": "浏览",
+        "create": "创建"
+      }
     }
   },
   "syncError": {

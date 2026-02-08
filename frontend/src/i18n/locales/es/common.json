@@ -154,6 +154,7 @@
     "backToActive": "Volver a activos",
     "noArchived": "No hay espacios de trabajo archivados",
     "noWorkspaces": "Sin espacios de trabajo",
+    "newWorkspace": "Nuevo espacio de trabajo",
     "needsAttention": "Necesita Atención",
     "idle": "Inactivo",
     "running": "En Ejecución",
@@ -352,6 +353,9 @@
     "tags": "Etiquetas",
     "files": "Archivos",
     "commands": "Comandos",
+    "chooseRepo": "Elegir repositorio",
+    "selectedRepo": "Repositorio seleccionado: {{repoName}}",
+    "missingRepo": "El repositorio seleccionado ya no está disponible.",
     "noTagsOrFiles": "No se encontraron etiquetas ni archivos",
     "noCommands": "No hay comandos disponibles para este agente."
   },
@@ -375,6 +379,7 @@
     "enterCommentPlaceholder": "Ingresa tu comentario aquí...",
     "subIssues": "Subtareas",
     "noSubIssues": "Sin subtareas",
+    "markIndependentIssue": "Marcar como problema independiente",
     "parentIssue": "Padre",
     "subIssueIndicator": "↳",
     "showSubIssues": "Mostrar subtareas",
@@ -386,6 +391,19 @@
       "title": "Se requiere iniciar sesión",
       "description": "Por favor inicia sesión para ver este proyecto.",
       "action": "Iniciar sesión"
+    }
+  },
+  "createMode": {
+    "headings": {
+      "repoStep": "¿En qué repositorios te gustaría trabajar?",
+      "chatStep": "¿En qué te gustaría trabajar?"
+    },
+    "repoPicker": {
+      "actions": {
+        "recent": "Recientes",
+        "browse": "Explorar",
+        "create": "Crear"
+      }
     }
   },
   "syncError": {

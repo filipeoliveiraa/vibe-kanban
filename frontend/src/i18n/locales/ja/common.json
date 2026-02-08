@@ -154,6 +154,7 @@
     "backToActive": "アクティブに戻る",
     "noArchived": "アーカイブされたワークスペースはありません",
     "noWorkspaces": "ワークスペースがありません",
+    "newWorkspace": "新しいワークスペース",
     "needsAttention": "対応が必要",
     "idle": "待機中",
     "running": "実行中",
@@ -352,6 +353,9 @@
     "tags": "タグ",
     "files": "ファイル",
     "commands": "コマンド",
+    "chooseRepo": "リポジトリを選択",
+    "selectedRepo": "選択中のリポジトリ: {{repoName}}",
+    "missingRepo": "選択したリポジトリは利用できなくなりました。",
     "noTagsOrFiles": "タグまたはファイルが見つかりません",
     "noCommands": "このエージェントで利用可能なコマンドはありません。"
   },
@@ -375,6 +379,7 @@
     "enterCommentPlaceholder": "コメントを入力してください...",
     "subIssues": "サブ課題",
     "noSubIssues": "サブ課題なし",
+    "markIndependentIssue": "独立した課題としてマーク",
     "parentIssue": "親",
     "subIssueIndicator": "↳",
     "showSubIssues": "サブ課題を表示",
@@ -386,6 +391,19 @@
       "title": "サインインが必要です",
       "description": "このプロジェクトを表示するにはサインインしてください。",
       "action": "サインイン"
+    }
+  },
+  "createMode": {
+    "headings": {
+      "repoStep": "どのリポジトリで作業しますか？",
+      "chatStep": "何に取り組みますか？"
+    },
+    "repoPicker": {
+      "actions": {
+        "recent": "最近",
+        "browse": "参照",
+        "create": "作成"
+      }
     }
   },
   "syncError": {

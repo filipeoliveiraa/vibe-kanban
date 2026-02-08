@@ -154,6 +154,7 @@
     "backToActive": "返回活躍",
     "noArchived": "沒有已封存的工作區",
     "noWorkspaces": "沒有工作區",
+    "newWorkspace": "新工作區",
     "needsAttention": "需要關注",
     "idle": "閒置",
     "running": "執行中",
@@ -352,6 +353,9 @@
     "tags": "標籤",
     "files": "檔案",
     "commands": "指令",
+    "chooseRepo": "選擇儲存庫",
+    "selectedRepo": "已選擇儲存庫：{{repoName}}",
+    "missingRepo": "所選儲存庫已無法使用。",
     "noTagsOrFiles": "找不到標籤或檔案",
     "noCommands": "此代理沒有可用的指令。"
   },
@@ -375,6 +379,7 @@
     "enterCommentPlaceholder": "在此輸入評論...",
     "subIssues": "子任務",
     "noSubIssues": "無子任務",
+    "markIndependentIssue": "標記為獨立問題",
     "parentIssue": "父級",
     "subIssueIndicator": "↳",
     "showSubIssues": "顯示子任務",
@@ -386,6 +391,19 @@
       "title": "需要登入",
       "description": "請登入以查看此專案。",
       "action": "登入"
+    }
+  },
+  "createMode": {
+    "headings": {
+      "repoStep": "你想在哪些儲存庫上工作？",
+      "chatStep": "你想做什麼工作？"
+    },
+    "repoPicker": {
+      "actions": {
+        "recent": "最近",
+        "browse": "瀏覽",
+        "create": "建立"
+      }
     }
   },
   "syncError": {

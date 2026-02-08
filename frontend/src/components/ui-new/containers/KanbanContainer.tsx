@@ -2,12 +2,14 @@ import { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectContext } from '@/contexts/remote/ProjectContext';
 import { useOrgContext } from '@/contexts/remote/OrgContext';
+import { useWorkspaceContext } from '@/contexts/WorkspaceContext';
 import { useActions } from '@/contexts/ActionsContext';
+import { useAuth } from '@/hooks/auth/useAuth';
 import { useUiPreferencesStore } from '@/stores/useUiPreferencesStore';
 import { useKanbanFilters, PRIORITY_ORDER } from '@/hooks/useKanbanFilters';
 import { bulkUpdateIssues, type BulkUpdateIssueItem } from '@/lib/remoteApi';
 import { useKanbanNavigation } from '@/hooks/useKanbanNavigation';
-import { PlusIcon, GearIcon } from '@phosphor-icons/react';
+import { PlusIcon, DotsThreeIcon } from '@phosphor-icons/react';
 import { Actions } from '@/components/ui-new/actions';
 import type { OrganizationMemberWithProfile } from 'shared/types';
 import {
@@ -19,10 +21,22 @@ import {
   type DropResult,
 } from '@/components/ui-new/views/KanbanBoard';
 import { KanbanCardContent } from '@/components/ui-new/views/KanbanCardContent';
+import {
+  IssueWorkspaceCard,
+  type WorkspaceWithStats,
+  type WorkspacePr,
+} from '@/components/ui-new/views/IssueWorkspaceCard';
 import { resolveRelationshipsForIssue } from '@/lib/resolveRelationships';
 import { KanbanFilterBar } from '@/components/ui-new/views/KanbanFilterBar';
 import { ViewNavTabs } from '@/components/ui-new/primitives/ViewNavTabs';
 import { IssueListView } from '@/components/ui-new/views/IssueListView';
+import { CommandBarDialog } from '@/components/ui-new/dialogs/CommandBarDialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui-new/primitives/Dropdown';
 
 function LoadingState() {
   const { t } = useTranslation('common');
@@ -54,11 +68,13 @@ export function KanbanContainer() {
     getTagObjectsForIssue,
     getTagsForIssue,
     getPullRequestsForIssue,
+    getWorkspacesForIssue,
     getRelationshipsForIssue,
     issuesById,
     insertIssueTag,
     removeIssueTag,
     insertTag,
+    pullRequests,
     isLoading: projectLoading,
   } = useProjectContext();
 
@@ -67,6 +83,8 @@ export function KanbanContainer() {
     membersWithProfilesById,
     isLoading: orgLoading,
   } = useOrgContext();
+  const { activeWorkspaces, selectWorkspace } = useWorkspaceContext();
+  const { userId } = useAuth();
 
   // Get project name by finding the project matching current projectId
   const projectName = projects.find((p) => p.id === projectId)?.name ?? '';
@@ -77,6 +95,7 @@ export function KanbanContainer() {
     issueAssignees,
     issueTags,
     projectId,
+    currentUserId: userId,
   });
 
   // Navigation hook for opening issues and create mode
@@ -95,7 +114,13 @@ export function KanbanContainer() {
   } = useActions();
 
   const kanbanFilters = useUiPreferencesStore((s) => s.kanbanFilters);
+  const activeKanbanViewId = useUiPreferencesStore(
+    (s) => s.kanbanProjectViewsByProject[projectId]?.activeViewId
+  );
   const kanbanViewMode = useUiPreferencesStore((s) => s.kanbanViewMode);
+  const showWorkspaces = useUiPreferencesStore(
+    (s) => s.showWorkspacesByProject[projectId] ?? true
+  );
   const listViewStatusFilter = useUiPreferencesStore(
     (s) => s.listViewStatusFilter
   );
@@ -103,9 +128,12 @@ export function KanbanContainer() {
   const setListViewStatusFilter = useUiPreferencesStore(
     (s) => s.setListViewStatusFilter
   );
-  const clearKanbanFilters = useUiPreferencesStore((s) => s.clearKanbanFilters);
+  const ensureKanbanProjectViews = useUiPreferencesStore(
+    (s) => s.ensureKanbanProjectViews
+  );
+  const applyKanbanView = useUiPreferencesStore((s) => s.applyKanbanView);
 
-  // Reset view mode and filters when navigating between projects
+  // Reset view mode and ensure project-specific views when navigating projects
   const prevProjectIdRef = useRef<string | null>(null);
 
   // Track when drag-drop sync is in progress to prevent flicker
@@ -118,15 +146,24 @@ export function KanbanContainer() {
     ) {
       setKanbanViewMode('kanban');
       setListViewStatusFilter(null);
-      clearKanbanFilters();
     }
+
     prevProjectIdRef.current = projectId;
+    ensureKanbanProjectViews(projectId);
   }, [
     projectId,
     setKanbanViewMode,
     setListViewStatusFilter,
-    clearKanbanFilters,
+    ensureKanbanProjectViews,
   ]);
+
+  // Always apply the active project view after initialization or sync restore.
+  useEffect(() => {
+    if (!activeKanbanViewId) {
+      return;
+    }
+    applyKanbanView(projectId, activeKanbanViewId);
+  }, [projectId, activeKanbanViewId, applyKanbanView]);
 
   // Sort all statuses for display settings
   const sortedStatuses = useMemo(
@@ -197,6 +234,7 @@ export function KanbanContainer() {
 
   // Track items as arrays of IDs grouped by status
   const [items, setItems] = useState<Record<string, string[]>>({});
+  const [isFiltersDialogOpen, setIsFiltersDialogOpen] = useState(false);
 
   // Sync items from filtered issues when they change
   useEffect(() => {
@@ -271,6 +309,91 @@ export function KanbanContainer() {
     }
     return map;
   }, [issueAssignees, membersWithProfilesById]);
+
+  const localWorkspacesById = useMemo(() => {
+    const map = new Map<string, (typeof activeWorkspaces)[number]>();
+
+    for (const workspace of activeWorkspaces) {
+      map.set(workspace.id, workspace);
+    }
+
+    return map;
+  }, [activeWorkspaces]);
+
+  const prsByWorkspaceId = useMemo(() => {
+    const map = new Map<string, WorkspacePr[]>();
+
+    for (const pr of pullRequests) {
+      if (!pr.workspace_id) continue;
+
+      const prs = map.get(pr.workspace_id) ?? [];
+      prs.push({
+        number: pr.number,
+        url: pr.url,
+        status: pr.status as 'open' | 'merged' | 'closed',
+      });
+      map.set(pr.workspace_id, prs);
+    }
+
+    return map;
+  }, [pullRequests]);
+
+  const workspacesByIssueId = useMemo(() => {
+    if (!showWorkspaces) {
+      return new Map<string, WorkspaceWithStats[]>();
+    }
+
+    const map = new Map<string, WorkspaceWithStats[]>();
+
+    for (const issue of issues) {
+      const nonArchivedWorkspaces = getWorkspacesForIssue(issue.id)
+        .filter(
+          (workspace) =>
+            !workspace.archived &&
+            !!workspace.local_workspace_id &&
+            localWorkspacesById.has(workspace.local_workspace_id)
+        )
+        .map((workspace) => {
+          const localWorkspace = localWorkspacesById.get(
+            workspace.local_workspace_id!
+          );
+
+          return {
+            id: workspace.id,
+            localWorkspaceId: workspace.local_workspace_id,
+            name: workspace.name,
+            archived: workspace.archived,
+            filesChanged: workspace.files_changed ?? 0,
+            linesAdded: workspace.lines_added ?? 0,
+            linesRemoved: workspace.lines_removed ?? 0,
+            prs: prsByWorkspaceId.get(workspace.id) ?? [],
+            owner: membersWithProfilesById.get(workspace.owner_user_id) ?? null,
+            updatedAt: workspace.updated_at,
+            isOwnedByCurrentUser: workspace.owner_user_id === userId,
+            isRunning: localWorkspace?.isRunning,
+            hasPendingApproval: localWorkspace?.hasPendingApproval,
+            hasRunningDevServer: localWorkspace?.hasRunningDevServer,
+            hasUnseenActivity: localWorkspace?.hasUnseenActivity,
+            latestProcessCompletedAt: localWorkspace?.latestProcessCompletedAt,
+            latestProcessStatus: localWorkspace?.latestProcessStatus,
+          };
+        });
+
+      if (nonArchivedWorkspaces.length > 0) {
+        map.set(issue.id, nonArchivedWorkspaces);
+      }
+    }
+
+    return map;
+  }, [
+    showWorkspaces,
+    issues,
+    getWorkspacesForIssue,
+    localWorkspacesById,
+    prsByWorkspaceId,
+    membersWithProfilesById,
+    userId,
+  ]);
 
   // Calculate sort_order based on column index and issue position
   // Formula: 1000 * [COLUMN_INDEX] + [ISSUE_INDEX] (both 1-based)
@@ -406,6 +529,17 @@ export function KanbanContainer() {
     [projectId, openAssigneeSelection]
   );
 
+  const handleCardMoreActionsClick = useCallback(
+    (issueId: string) => {
+      CommandBarDialog.show({
+        page: 'issueActions',
+        projectId,
+        issueIds: [issueId],
+      });
+    },
+    [projectId]
+  );
+
   const handleCardTagToggle = useCallback(
     (issueId: string, tagId: string) => {
       const currentIssueTags = getTagsForIssue(issueId);
@@ -441,31 +575,6 @@ export function KanbanContainer() {
     [insertTag, projectId]
   );
 
-  // Handler for create issue button in ViewNavTabs
-  // Determines default status based on current view/tab
-  const handleCreateIssueFromNav = useCallback(() => {
-    let defaultStatusId: string | undefined;
-
-    if (kanbanViewMode === 'kanban') {
-      // "Active" tab: first non-hidden status by sort order
-      defaultStatusId = visibleStatuses[0]?.id;
-    } else if (listViewStatusFilter) {
-      // Hidden status tab: use that specific status
-      defaultStatusId = listViewStatusFilter;
-    } else {
-      // "All" tab: first status by sort order
-      defaultStatusId = sortedStatuses[0]?.id;
-    }
-
-    startCreate({ statusId: defaultStatusId });
-  }, [
-    kanbanViewMode,
-    listViewStatusFilter,
-    visibleStatuses,
-    sortedStatuses,
-    startCreate,
-  ]);
-
   const isLoading = projectLoading || orgLoading;
 
   if (isLoading) {
@@ -475,36 +584,51 @@ export function KanbanContainer() {
   return (
     <div className="flex flex-col h-full space-y-base">
       <div className="px-double pt-double space-y-base">
-        <div className="flex items-center gap-double">
+        <div className="flex items-center justify-between gap-base">
           <h2 className="text-2xl font-medium">{projectName}</h2>
-          <button
-            type="button"
-            onClick={() => executeAction(Actions.ProjectSettings)}
-            className="p-half rounded-sm text-low hover:text-normal hover:bg-secondary transition-colors"
-            aria-label="Project settings"
-          >
-            <GearIcon className="size-icon-xs" weight="bold" />
-          </button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="p-half rounded-sm text-low hover:text-normal hover:bg-secondary transition-colors"
+                aria-label="Project menu"
+              >
+                <DotsThreeIcon className="size-icon-xs" weight="bold" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() => executeAction(Actions.ProjectSettings)}
+              >
+                {t('kanban.editProjectSettings', 'Edit project settings')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+
+        <div className="flex items-center gap-base flex-wrap">
           <ViewNavTabs
             activeView={kanbanViewMode}
             onViewChange={setKanbanViewMode}
             hiddenStatuses={hiddenStatuses}
             selectedStatusId={listViewStatusFilter}
             onStatusSelect={setListViewStatusFilter}
-            onCreateIssue={handleCreateIssueFromNav}
+          />
+          <KanbanFilterBar
+            isFiltersDialogOpen={isFiltersDialogOpen}
+            onFiltersDialogOpenChange={setIsFiltersDialogOpen}
+            tags={tags}
+            users={[...membersWithProfilesById.values()]}
+            hasActiveFilters={hasActiveFilters}
+            statuses={sortedStatuses}
+            projectId={projectId}
+            issueCountByStatus={issueCountByStatus}
+            onInsertStatus={insertStatus}
+            onUpdateStatus={updateStatus}
+            onRemoveStatus={removeStatus}
           />
         </div>
-        <KanbanFilterBar
-          tags={tags}
-          users={[...membersWithProfilesById.values()]}
-          hasActiveFilters={hasActiveFilters}
-          statuses={sortedStatuses}
-          projectId={projectId}
-          issueCountByStatus={issueCountByStatus}
-          onInsertStatus={insertStatus}
-          onUpdateStatus={updateStatus}
-          onRemoveStatus={removeStatus}
-        />
       </div>
 
       {kanbanViewMode === 'kanban' ? (
@@ -543,6 +667,22 @@ export function KanbanContainer() {
                       {issueIds.map((issueId, index) => {
                         const issue = issueMap[issueId];
                         if (!issue) return null;
+                        const issueWorkspaces =
+                          workspacesByIssueId.get(issue.id) ?? [];
+                        const workspaceIdsShownOnCard = new Set(
+                          issueWorkspaces.map((workspace) => workspace.id)
+                        );
+                        const issueCardPullRequests = getPullRequestsForIssue(
+                          issue.id
+                        ).filter((pr) => {
+                          if (!pr.workspace_id) {
+                            return true;
+                          }
+
+                          // If this PR is already visible under a workspace card,
+                          // do not render it again at the issue level.
+                          return !workspaceIdsShownOnCard.has(pr.workspace_id);
+                        });
 
                         return (
                           <KanbanCard
@@ -550,6 +690,7 @@ export function KanbanContainer() {
                             id={issue.id}
                             name={issue.title}
                             index={index}
+                            className="group"
                             onClick={() => handleCardClick(issue.id)}
                             isOpen={selectedKanbanIssueId === issue.id}
                           >
@@ -560,7 +701,7 @@ export function KanbanContainer() {
                               priority={issue.priority}
                               tags={getTagObjectsForIssue(issue.id)}
                               assignees={issueAssigneesMap[issue.id] ?? []}
-                              pullRequests={getPullRequestsForIssue(issue.id)}
+                              pullRequests={issueCardPullRequests}
                               relationships={resolveRelationshipsForIssue(
                                 issue.id,
                                 getRelationshipsForIssue(issue.id),
@@ -575,6 +716,9 @@ export function KanbanContainer() {
                                 e.stopPropagation();
                                 handleCardAssigneeClick(issue.id);
                               }}
+                              onMoreActionsClick={() =>
+                                handleCardMoreActionsClick(issue.id)
+                              }
                               tagEditProps={{
                                 allTags: tags,
                                 selectedTagIds: getTagsForIssue(issue.id).map(
@@ -585,6 +729,27 @@ export function KanbanContainer() {
                                 onCreateTag: handleCreateTag,
                               }}
                             />
+                            {issueWorkspaces.length > 0 && (
+                              <div className="mt-base flex flex-col gap-half">
+                                {issueWorkspaces.map((workspace) => (
+                                  <IssueWorkspaceCard
+                                    key={workspace.id}
+                                    workspace={workspace}
+                                    onClick={
+                                      workspace.localWorkspaceId
+                                        ? () =>
+                                            selectWorkspace(
+                                              workspace.localWorkspaceId!
+                                            )
+                                        : undefined
+                                    }
+                                    showOwner={false}
+                                    showStatusBadge={false}
+                                    showNoPrText={false}
+                                  />
+                                ))}
+                              </div>
+                            )}
                           </KanbanCard>
                         );
                       })}

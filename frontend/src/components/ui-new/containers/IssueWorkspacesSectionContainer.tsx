@@ -5,8 +5,10 @@ import { PlusIcon } from '@phosphor-icons/react';
 import { useProjectContext } from '@/contexts/remote/ProjectContext';
 import { useAuth } from '@/hooks/auth/useAuth';
 import { useOrgContext } from '@/contexts/remote/OrgContext';
-import { useActions } from '@/contexts/ActionsContext';
+import { useUserContext } from '@/contexts/remote/UserContext';
+import { useWorkspaceContext } from '@/contexts/WorkspaceContext';
 import { attemptsApi } from '@/lib/api';
+import { getWorkspaceDefaults } from '@/lib/workspaceDefaults';
 import { ConfirmDialog } from '@/components/ui-new/dialogs/ConfirmDialog';
 import type { WorkspaceWithStats } from '@/components/ui-new/views/IssueWorkspaceCard';
 import { IssueWorkspacesSection } from '@/components/ui-new/views/IssueWorkspacesSection';
@@ -26,21 +28,41 @@ export function IssueWorkspacesSectionContainer({
   const { t } = useTranslation('common');
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
-  const { openWorkspaceSelection } = useActions();
   const { userId } = useAuth();
+  const { workspaces } = useUserContext();
 
   const {
     pullRequests,
+    getIssue,
     getWorkspacesForIssue,
     isLoading: projectLoading,
   } = useProjectContext();
+  const { activeWorkspaces, archivedWorkspaces } = useWorkspaceContext();
   const { membersWithProfilesById, isLoading: orgLoading } = useOrgContext();
+
+  const localWorkspacesById = useMemo(() => {
+    const map = new Map<string, (typeof activeWorkspaces)[number]>();
+
+    for (const workspace of activeWorkspaces) {
+      map.set(workspace.id, workspace);
+    }
+
+    for (const workspace of archivedWorkspaces) {
+      map.set(workspace.id, workspace);
+    }
+
+    return map;
+  }, [activeWorkspaces, archivedWorkspaces]);
 
   // Get workspaces for the issue, with PR info
   const workspacesWithStats: WorkspaceWithStats[] = useMemo(() => {
     const rawWorkspaces = getWorkspacesForIssue(issueId);
 
     return rawWorkspaces.map((workspace) => {
+      const localWorkspace = workspace.local_workspace_id
+        ? localWorkspacesById.get(workspace.local_workspace_id)
+        : undefined;
+
       // Find all linked PRs for this workspace
       const linkedPrs = pullRequests
         .filter((pr) => pr.workspace_id === workspace.id)
@@ -66,6 +88,12 @@ export function IssueWorkspacesSectionContainer({
         owner,
         updatedAt: workspace.updated_at,
         isOwnedByCurrentUser: workspace.owner_user_id === userId,
+        isRunning: localWorkspace?.isRunning,
+        hasPendingApproval: localWorkspace?.hasPendingApproval,
+        hasRunningDevServer: localWorkspace?.hasRunningDevServer,
+        hasUnseenActivity: localWorkspace?.hasUnseenActivity,
+        latestProcessCompletedAt: localWorkspace?.latestProcessCompletedAt,
+        latestProcessStatus: localWorkspace?.latestProcessStatus,
       };
     });
   }, [
@@ -74,16 +102,56 @@ export function IssueWorkspacesSectionContainer({
     pullRequests,
     membersWithProfilesById,
     userId,
+    localWorkspacesById,
   ]);
 
   const isLoading = projectLoading || orgLoading;
 
-  // Handle clicking '+' to link a workspace
-  const handleAddWorkspace = useCallback(() => {
-    if (projectId) {
-      openWorkspaceSelection(projectId, issueId);
+  // Handle clicking '+' to create and link a new workspace directly
+  const handleAddWorkspace = useCallback(async () => {
+    if (!projectId) {
+      navigate('/workspaces/create');
+      return;
     }
-  }, [projectId, issueId, openWorkspaceSelection]);
+
+    const issue = getIssue(issueId);
+    const initialPrompt = issue
+      ? issue.description
+        ? `${issue.title}\n\n${issue.description}`
+        : issue.title
+      : null;
+
+    const localWorkspaceIds = new Set([
+      ...activeWorkspaces.map((workspace) => workspace.id),
+      ...archivedWorkspaces.map((workspace) => workspace.id),
+    ]);
+
+    const defaults = await getWorkspaceDefaults(workspaces, localWorkspaceIds);
+
+    navigate('/workspaces/create', {
+      state: {
+        initialPrompt,
+        preferredRepos: defaults?.preferredRepos ?? null,
+        project_id: defaults?.project_id ?? null,
+        linkedIssue: issue
+          ? {
+              issueId: issue.id,
+              simpleId: issue.simple_id,
+              title: issue.title,
+              remoteProjectId: projectId,
+            }
+          : null,
+      },
+    });
+  }, [
+    projectId,
+    navigate,
+    getIssue,
+    issueId,
+    activeWorkspaces,
+    archivedWorkspaces,
+    workspaces,
+  ]);
 
   // Handle clicking a workspace card to open it
   const handleWorkspaceClick = useCallback(
@@ -173,6 +241,7 @@ export function IssueWorkspacesSectionContainer({
       isLoading={isLoading}
       actions={actions}
       onWorkspaceClick={handleWorkspaceClick}
+      onCreateWorkspace={handleAddWorkspace}
       onUnlinkWorkspace={handleUnlinkWorkspace}
       onDeleteWorkspace={handleDeleteWorkspace}
     />
