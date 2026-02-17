@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use api_types::CreateWorkspaceRequest;
+use api_types::{CreateWorkspaceRequest, PullRequestStatus, UpsertPullRequestRequest};
 use axum::{
     Extension, Json, Router,
     extract::{
@@ -39,7 +39,7 @@ use executors::{
         script::{ScriptContext, ScriptRequest, ScriptRequestLanguage},
     },
     executors::{CodingAgent, ExecutorError},
-    profile::{ExecutorConfigs, ExecutorProfileId},
+    profile::{ExecutorConfig, ExecutorConfigs, ExecutorProfileId},
 };
 use git::{ConflictOp, GitCliError, GitService, GitServiceError};
 use git2::BranchType;
@@ -192,7 +192,7 @@ pub async fn update_workspace(
 #[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
 pub struct CreateTaskAttemptBody {
     pub task_id: Uuid,
-    pub executor_profile_id: ExecutorProfileId,
+    pub executor_config: ExecutorConfig,
     pub repos: Vec<WorkspaceRepoInput>,
 }
 
@@ -215,7 +215,7 @@ pub async fn create_task_attempt(
     State(deployment): State<DeploymentImpl>,
     Json(payload): Json<CreateTaskAttemptBody>,
 ) -> Result<ResponseJson<ApiResponse<Workspace>>, ApiError> {
-    let executor_profile_id = payload.executor_profile_id.clone();
+    let executor_profile_id = payload.executor_config.profile_id();
 
     if payload.repos.is_empty() {
         return Err(ApiError::BadRequest(
@@ -275,7 +275,7 @@ pub async fn create_task_attempt(
     WorkspaceRepo::create_many(pool, workspace.id, &workspace_repos).await?;
     if let Err(err) = deployment
         .container()
-        .start_workspace(&workspace, executor_profile_id.clone())
+        .start_workspace(&workspace, payload.executor_config.clone())
         .await
     {
         tracing::error!("Failed to start task attempt: {}", err);
@@ -459,6 +459,26 @@ pub struct PushTaskAttemptRequest {
     pub repo_id: Uuid,
 }
 
+/// Resolves the best available vibe-kanban identifier for commit messages.
+/// Priority: remote issue simple_id > remote issue UUID > local task UUID.
+async fn resolve_vibe_kanban_identifier(
+    deployment: &DeploymentImpl,
+    local_workspace_id: Uuid,
+    task_id: Uuid,
+) -> String {
+    if let Ok(client) = deployment.remote_client()
+        && let Ok(remote_ws) = client.get_workspace_by_local_id(local_workspace_id).await
+        && let Some(issue_id) = remote_ws.issue_id
+        && let Ok(issue) = client.get_issue(issue_id).await
+    {
+        if !issue.simple_id.is_empty() {
+            return issue.simple_id;
+        }
+        return issue_id.to_string();
+    }
+    task_id.to_string()
+}
+
 #[axum::debug_handler]
 pub async fn merge_task_attempt(
     Extension(workspace): Extension<Workspace>,
@@ -509,10 +529,9 @@ pub async fn merge_task_attempt(
         .parent_task(pool)
         .await?
         .ok_or(ApiError::Workspace(WorkspaceError::TaskNotFound))?;
-    let task_uuid_str = task.id.to_string();
-    let first_uuid_section = task_uuid_str.split('-').next().unwrap_or(&task_uuid_str);
+    let vk_id = resolve_vibe_kanban_identifier(&deployment, workspace.id, task.id).await;
 
-    let mut commit_message = format!("{} (vibe-kanban {})", task.title, first_uuid_section);
+    let mut commit_message = format!("{} (vibe-kanban {})", task.title, vk_id);
 
     // Add description on next line if it exists
     if let Some(description) = &task.description
@@ -585,7 +604,27 @@ pub async fn push_task_attempt_branch(
         .git()
         .push_to_remote(&worktree_path, &workspace.branch, false)
     {
-        Ok(_) => Ok(ResponseJson(ApiResponse::success(()))),
+        Ok(_) => {
+            // Sync workspace stats to remote after successful push
+            if let Ok(client) = deployment.remote_client() {
+                let pool = deployment.db().pool.clone();
+                let git = deployment.git().clone();
+                let mut ws = workspace.clone();
+                ws.container_ref = Some(container_ref.clone());
+                tokio::spawn(async move {
+                    let stats = diff_stream::compute_diff_stats(&pool, &git, &ws).await;
+                    remote_sync::sync_workspace_to_remote(
+                        &client,
+                        ws.id,
+                        None,
+                        None,
+                        stats.as_ref(),
+                    )
+                    .await;
+                });
+            }
+            Ok(ResponseJson(ApiResponse::success(())))
+        }
         Err(GitServiceError::GitCLI(GitCliError::PushRejected(_))) => Ok(ResponseJson(
             ApiResponse::error_with_data(PushError::ForcePushRequired),
         )),
@@ -619,6 +658,19 @@ pub async fn force_push_task_attempt_branch(
     deployment
         .git()
         .push_to_remote(&worktree_path, &workspace.branch, true)?;
+
+    // Sync workspace stats to remote after successful force push
+    if let Ok(client) = deployment.remote_client() {
+        let pool = deployment.db().pool.clone();
+        let git = deployment.git().clone();
+        let mut ws = workspace.clone();
+        ws.container_ref = Some(container_ref.clone());
+        tokio::spawn(async move {
+            let stats = diff_stream::compute_diff_stats(&pool, &git, &ws).await;
+            remote_sync::sync_workspace_to_remote(&client, ws.id, None, None, stats.as_ref()).await;
+        });
+    }
+
     Ok(ResponseJson(ApiResponse::success(())))
 }
 
@@ -1916,6 +1968,49 @@ pub async fn link_workspace(
             lines_removed: stats.as_ref().map(|s| s.lines_removed as i32),
         })
         .await?;
+
+    // Sync any existing PR data for this workspace to remote
+    {
+        let pool = deployment.db().pool.clone();
+        let ws_id = workspace.id;
+        let client = client.clone();
+        tokio::spawn(async move {
+            let merges = match Merge::find_by_workspace_id(&pool, ws_id).await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to fetch merges for workspace {} during link: {}",
+                        ws_id,
+                        e
+                    );
+                    return;
+                }
+            };
+            for merge in merges {
+                if let Merge::Pr(pr_merge) = merge {
+                    let pr_status = match pr_merge.pr_info.status {
+                        MergeStatus::Open => PullRequestStatus::Open,
+                        MergeStatus::Merged => PullRequestStatus::Merged,
+                        MergeStatus::Closed => PullRequestStatus::Closed,
+                        MergeStatus::Unknown => continue,
+                    };
+                    remote_sync::sync_pr_to_remote(
+                        &client,
+                        UpsertPullRequestRequest {
+                            url: pr_merge.pr_info.url,
+                            number: pr_merge.pr_info.number as i32,
+                            status: pr_status,
+                            merged_at: pr_merge.pr_info.merged_at,
+                            merge_commit_sha: pr_merge.pr_info.merge_commit_sha,
+                            target_branch_name: pr_merge.target_branch_name,
+                            local_workspace_id: ws_id,
+                        },
+                    )
+                    .await;
+                }
+            }
+        });
+    }
 
     Ok(ResponseJson(ApiResponse::success(())))
 }

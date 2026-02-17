@@ -2,7 +2,6 @@ import { useCallback } from 'react';
 import { ScratchType, type DraftWorkspaceData } from 'shared/types';
 import { useKanbanNavigation } from '@/hooks/useKanbanNavigation';
 import { scratchApi } from '@/lib/api';
-import { generateUuid } from '@/lib/uuid';
 import type { CreateModeInitialState } from '@/hooks/useCreateModeState';
 
 export function useProjectWorkspaceCreateDraft() {
@@ -15,7 +14,7 @@ export function useProjectWorkspaceCreateDraft() {
     ): Promise<string | null> => {
       if (!projectId) return null;
 
-      const draftId = generateUuid();
+      const draftId = crypto.randomUUID();
 
       const draftData: DraftWorkspaceData = {
         message: initialState.initialPrompt ?? '',
@@ -25,7 +24,7 @@ export function useProjectWorkspaceCreateDraft() {
             repo_id: repo.repo_id,
             target_branch: repo.target_branch ?? '',
           })) ?? [],
-        selected_profile: null,
+        executor_config: null,
         linked_issue: initialState.linkedIssue
           ? {
               issue_id: initialState.linkedIssue.issueId,

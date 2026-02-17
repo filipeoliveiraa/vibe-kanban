@@ -12,10 +12,11 @@ use crate::{
     command::{CmdOverrides, CommandBuildError, CommandBuilder, apply_overrides},
     env::ExecutionEnv,
     executors::{
-        AppendPrompt, ExecutorError, SpawnedChild, StandardCodingAgentExecutor,
+        AppendPrompt, BaseCodingAgent, ExecutorError, SpawnedChild, StandardCodingAgentExecutor,
         claude::{ClaudeLogProcessor, HistoryStrategy},
     },
     logs::{stderr_processor::normalize_stderr_logs, utils::EntryIndexProvider},
+    profile::ExecutorConfig,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS, JsonSchema)]
@@ -124,11 +125,15 @@ impl StandardCodingAgentExecutor for Amp {
         Ok(child.into())
     }
 
-    fn normalize_logs(&self, msg_store: Arc<MsgStore>, current_dir: &Path) {
+    fn normalize_logs(
+        &self,
+        msg_store: Arc<MsgStore>,
+        current_dir: &Path,
+    ) -> Vec<tokio::task::JoinHandle<()>> {
         let entry_index_provider = EntryIndexProvider::start_from(&msg_store);
 
         // Process stdout logs (Amp's stream JSON output) using Claude's log processor
-        ClaudeLogProcessor::process_logs(
+        let h1 = ClaudeLogProcessor::process_logs(
             msg_store.clone(),
             current_dir,
             entry_index_provider.clone(),
@@ -136,11 +141,24 @@ impl StandardCodingAgentExecutor for Amp {
         );
 
         // Process stderr logs using the standard stderr processor
-        normalize_stderr_logs(msg_store, entry_index_provider);
+        let h2 = normalize_stderr_logs(msg_store, entry_index_provider);
+
+        vec![h1, h2]
     }
 
     // MCP configuration methods
     fn default_mcp_config_path(&self) -> Option<std::path::PathBuf> {
         dirs::home_dir().map(|home| home.join(".config").join("amp").join("settings.json"))
+    }
+
+    fn get_preset_options(&self) -> ExecutorConfig {
+        ExecutorConfig {
+            executor: BaseCodingAgent::Amp,
+            variant: None,
+            model_id: None,
+            agent_id: None,
+            reasoning_id: None,
+            permission_policy: Some(crate::model_selector::PermissionPolicy::Auto),
+        }
     }
 }

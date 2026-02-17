@@ -111,6 +111,7 @@ export type DevServerState = 'stopped' | 'starting' | 'running' | 'stopping';
 export interface ProjectMutations {
   removeIssue: (id: string) => void;
   duplicateIssue: (issueId: string) => void;
+  getIssue: (issueId: string) => { simple_id: string } | undefined;
 }
 
 // Context provided to action executors (from React hooks)
@@ -973,6 +974,16 @@ export const Actions = {
       const repos = await attemptsApi.getRepos(workspaceId);
       const repo = repos.find((r) => r.id === repoId);
 
+      // Resolve vibe-kanban identifier from remote workspace + issue
+      let issueIdentifier: string | undefined;
+      const remoteWs = ctx.remoteWorkspaces.find(
+        (w) => w.local_workspace_id === workspaceId
+      );
+      if (remoteWs?.issue_id && ctx.projectMutations?.getIssue) {
+        const issue = ctx.projectMutations.getIssue(remoteWs.issue_id);
+        issueIdentifier = issue?.simple_id || remoteWs.issue_id;
+      }
+
       const result = await CreatePRDialog.show({
         attempt: workspace,
         task: {
@@ -983,10 +994,50 @@ export const Actions = {
         },
         repoId,
         targetBranch: repo?.target_branch,
+        issueIdentifier,
       });
 
       if (!result.success && result.error) {
         throw new Error(result.error);
+      }
+    },
+  },
+
+  GitLinkPR: {
+    id: 'git-link-pr',
+    label: 'Link Pull Request',
+    icon: LinkIcon,
+    requiresTarget: ActionTargetType.GIT,
+    isVisible: (ctx) => ctx.hasWorkspace && ctx.hasGitRepos && !ctx.hasOpenPR,
+    execute: async (ctx, workspaceId, repoId) => {
+      const result = await attemptsApi.attachPr(workspaceId, {
+        repo_id: repoId,
+      });
+
+      if (result.success && result.data.pr_attached && result.data.pr_number) {
+        invalidateWorkspaceQueries(ctx.queryClient, workspaceId);
+        ctx.queryClient.invalidateQueries({
+          queryKey: ['branch-status'],
+        });
+
+        await ConfirmDialog.show({
+          title: 'Pull Request Linked',
+          message: `Linked PR #${result.data.pr_number}${result.data.pr_url ? ` — ${result.data.pr_url}` : ''}`,
+          confirmText: 'OK',
+          showCancelButton: false,
+          variant: 'success',
+        });
+      } else if (result.success && !result.data.pr_attached) {
+        await ConfirmDialog.show({
+          title: 'No Pull Request Found',
+          message:
+            'No open pull request was found matching this branch. Make sure a PR exists for this branch on the remote.',
+          confirmText: 'OK',
+          showCancelButton: false,
+          variant: 'info',
+        });
+      } else if (!result.success) {
+        throw new Error(result.message || 'Failed to attach PR');
       }
     },
   },

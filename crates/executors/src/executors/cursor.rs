@@ -18,15 +18,21 @@ use workspace_utils::{
 use crate::{
     command::{CmdOverrides, CommandBuildError, CommandBuilder, apply_overrides},
     env::ExecutionEnv,
+    executor_discovery::ExecutorDiscoveredOptions,
     executors::{
-        AppendPrompt, AvailabilityInfo, ExecutorError, SpawnedChild, StandardCodingAgentExecutor,
+        AppendPrompt, AvailabilityInfo, BaseCodingAgent, ExecutorError, SpawnedChild,
+        StandardCodingAgentExecutor,
     },
     logs::{
         ActionType, FileChange, NormalizedEntry, NormalizedEntryError, NormalizedEntryType,
         TodoItem, ToolStatus,
         plain_text_processor::PlainTextLogProcessor,
-        utils::{ConversationPatch, EntryIndexProvider, shell_command_parsing::CommandCategory},
+        utils::{
+            ConversationPatch, EntryIndexProvider, patch, shell_command_parsing::CommandCategory,
+        },
     },
+    model_selector::{ModelInfo, ModelSelectorConfig},
+    profile::ExecutorConfig,
 };
 
 mod mcp;
@@ -74,6 +80,18 @@ impl CursorAgent {
 
 #[async_trait]
 impl StandardCodingAgentExecutor for CursorAgent {
+    fn apply_overrides(&mut self, executor_config: &ExecutorConfig) {
+        if let Some(model_id) = &executor_config.model_id {
+            self.model = Some(model_id.clone());
+        }
+        if let Some(permission_policy) = executor_config.permission_policy.clone() {
+            self.force = Some(matches!(
+                permission_policy,
+                crate::model_selector::PermissionPolicy::Auto
+            ));
+        }
+    }
+
     async fn spawn(
         &self,
         current_dir: &Path,
@@ -153,13 +171,17 @@ impl StandardCodingAgentExecutor for CursorAgent {
         Ok(child.into())
     }
 
-    fn normalize_logs(&self, msg_store: Arc<MsgStore>, worktree_path: &Path) {
+    fn normalize_logs(
+        &self,
+        msg_store: Arc<MsgStore>,
+        worktree_path: &Path,
+    ) -> Vec<tokio::task::JoinHandle<()>> {
         let entry_index_provider = EntryIndexProvider::start_from(&msg_store);
 
         // Custom stderr processor for Cursor that detects login errors
         let msg_store_stderr = msg_store.clone();
         let entry_index_provider_stderr = entry_index_provider.clone();
-        tokio::spawn(async move {
+        let h1 = tokio::spawn(async move {
             let mut stderr = msg_store_stderr.stderr_chunked_stream();
             let mut processor = PlainTextLogProcessor::builder()
                 .normalized_entry_producer(Box::new(|content: String| {
@@ -203,7 +225,7 @@ impl StandardCodingAgentExecutor for CursorAgent {
 
         // Process Cursor stdout JSONL with typed serde models
         let current_dir = worktree_path.to_path_buf();
-        tokio::spawn(async move {
+        let h2 = tokio::spawn(async move {
             let mut lines = msg_store.stdout_lines_stream();
 
             // Assistant streaming coalescer state
@@ -491,6 +513,8 @@ impl StandardCodingAgentExecutor for CursorAgent {
                 }
             }
         });
+
+        vec![h1, h2]
     }
 
     fn default_mcp_config_path(&self) -> Option<std::path::PathBuf> {
@@ -513,6 +537,58 @@ impl StandardCodingAgentExecutor for CursorAgent {
         } else {
             AvailabilityInfo::NotFound
         }
+    }
+
+    fn get_preset_options(&self) -> ExecutorConfig {
+        ExecutorConfig {
+            executor: BaseCodingAgent::CursorAgent,
+            variant: None,
+            model_id: self.model.clone(),
+            agent_id: None,
+            reasoning_id: None,
+            permission_policy: Some(crate::model_selector::PermissionPolicy::Auto),
+        }
+    }
+
+    async fn discover_options(
+        &self,
+        _workdir: Option<&std::path::Path>,
+        _repo_path: Option<&std::path::Path>,
+    ) -> Result<futures::stream::BoxStream<'static, json_patch::Patch>, ExecutorError> {
+        let options = ExecutorDiscoveredOptions {
+            model_selector: ModelSelectorConfig {
+                models: [
+                    ("auto", "Auto"),
+                    ("composer-1.5", "Composer 1.5"),
+                    ("gpt-5.1-codex-max", "GPT-5.1 Codex Max"),
+                    ("gpt-5.1-codex-max-high", "GPT-5.1 Codex Max High"),
+                    ("gpt-5.2", "GPT-5.2"),
+                    ("opus-4.5-thinking", "Opus 4.5 Thinking"),
+                    ("gpt-5.2-high", "GPT-5.2 High"),
+                    ("gemini-3-pro", "Gemini 3 Pro"),
+                    ("opus-4.5", "Opus 4.5"),
+                    ("sonnet-4.5", "Sonnet 4.5"),
+                    ("sonnet-4.5-thinking", "Sonnet 4.5 Thinking"),
+                    ("gemini-3-flash", "Gemini 3 Flash"),
+                    ("grok", "Grok"),
+                    ("composer-1", "Composer 1"),
+                ]
+                .into_iter()
+                .map(|(id, name)| ModelInfo {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    provider_id: None,
+                    reasoning_options: vec![],
+                })
+                .collect(),
+                default_model: Some("auto".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        Ok(Box::pin(futures::stream::once(async move {
+            patch::executor_discovered_options(options)
+        })))
     }
 }
 /* ===========================
