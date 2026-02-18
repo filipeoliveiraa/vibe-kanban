@@ -5,12 +5,8 @@ import { useCreateMode } from '@/contexts/CreateModeContext';
 import { useUserSystem } from '@/components/ConfigProvider';
 import { useCreateWorkspace } from '@/hooks/useCreateWorkspace';
 import { useCreateAttachments } from '@/hooks/useCreateAttachments';
-import { useMultiRepoBranches } from '@/hooks/useRepoBranches';
 import { useExecutorConfig } from '@/hooks/useExecutorConfig';
-import {
-  areProfilesEqual,
-  getSortedExecutorVariantKeys,
-} from '@/utils/executor';
+import { getSortedExecutorVariantKeys } from '@/utils/executor';
 import { splitMessageToTitleDescription } from '@/utils/string';
 import type { ExecutorProfileId, BaseCodingAgent, Repo } from 'shared/types';
 import { CreateChatBox } from '../primitives/CreateChatBox';
@@ -29,18 +25,19 @@ export function CreateChatBoxContainer({
   onWorkspaceCreated,
 }: CreateChatBoxContainerProps) {
   const { t } = useTranslation('common');
-  const { profiles, config, updateAndSaveConfig } = useUserSystem();
+  const { profiles, config } = useUserSystem();
   const {
     repos,
     targetBranches,
-    setTargetBranch,
     message,
     setMessage,
     selectedProjectId,
     clearDraft,
     hasInitialValue,
+    hasResolvedInitialRepoDefaults,
     linkedIssue,
     clearLinkedIssue,
+    preferredExecutorConfig,
     executorConfig: draftConfig,
     setExecutorConfig: setDraftConfig,
   } = useCreateMode();
@@ -50,45 +47,24 @@ export function CreateChatBoxContainer({
   });
   const hasSelectedRepos = repos.length > 0;
   const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState(false);
-  const [saveAsDefault, setSaveAsDefault] = useState(false);
   const [hasInitializedStep, setHasInitializedStep] = useState(false);
   const [isSelectingRepos, setIsSelectingRepos] = useState(true);
 
   useEffect(() => {
     if (!hasInitialValue || hasInitializedStep) return;
+    if (!hasSelectedRepos && !hasResolvedInitialRepoDefaults) return;
+
     setIsSelectingRepos(!hasSelectedRepos);
     setHasInitializedStep(true);
-  }, [hasInitialValue, hasInitializedStep, hasSelectedRepos]);
+  }, [
+    hasInitialValue,
+    hasInitializedStep,
+    hasSelectedRepos,
+    hasResolvedInitialRepoDefaults,
+  ]);
 
   const showRepoPickerStep = !hasSelectedRepos || isSelectingRepos;
   const showChatStep = hasSelectedRepos && !isSelectingRepos;
-
-  // Auto-select branch for repos that don't have one yet
-  const repoIds = useMemo(() => repos.map((r) => r.id), [repos]);
-  const { branchesByRepo } = useMultiRepoBranches(repoIds);
-
-  useEffect(() => {
-    repos.forEach((repo) => {
-      if (targetBranches[repo.id]) return;
-      const branches = branchesByRepo[repo.id];
-      if (!branches) return;
-
-      // Priority 1: default_target_branch if configured
-      if (
-        repo.default_target_branch &&
-        branches.some((b) => b.name === repo.default_target_branch)
-      ) {
-        setTargetBranch(repo.id, repo.default_target_branch);
-        return;
-      }
-
-      // Priority 2: current checked-out branch
-      const currentBranch = branches.find((b) => b.is_current);
-      if (currentBranch) {
-        setTargetBranch(repo.id, currentBranch.name);
-      }
-    });
-  }, [repos, branchesByRepo, targetBranches, setTargetBranch]);
 
   // Attachment handling - insert markdown and track image IDs
   const handleInsertMarkdown = useCallback(
@@ -139,7 +115,7 @@ export function CreateChatBoxContainer({
     setOverrides: setExecutorOverrides,
   } = useExecutorConfig({
     profiles,
-    lastUsedConfig: null,
+    lastUsedConfig: preferredExecutorConfig,
     scratchConfig,
     configExecutorProfile: config?.executor_profile,
     onPersist: (cfg) => setDraftConfig(cfg),
@@ -152,19 +128,6 @@ export function CreateChatBoxContainer({
         : null,
     [effectiveExecutor, selectedVariant]
   );
-
-  // Detect if user has changed from their saved default
-  const hasChangedFromDefault = useMemo(() => {
-    if (!config?.executor_profile || !effectiveProfileId) return false;
-    return !areProfilesEqual(effectiveProfileId, config.executor_profile);
-  }, [effectiveProfileId, config?.executor_profile]);
-
-  // Reset toggle when profile matches default again
-  useEffect(() => {
-    if (!hasChangedFromDefault) {
-      setSaveAsDefault(false);
-    }
-  }, [hasChangedFromDefault]);
 
   // Get project ID from context
   const projectId = selectedProjectId;
@@ -192,9 +155,14 @@ export function CreateChatBoxContainer({
     [repos, targetBranches]
   );
 
+  const hasSelectedBranchesForAllRepos = repos.every(
+    (repo) => !!targetBranches[repo.id]
+  );
+
   // Determine if we can submit
   const canSubmit =
     hasSelectedRepos &&
+    hasSelectedBranchesForAllRepos &&
     message.trim().length > 0 &&
     effectiveExecutor !== null &&
     projectId !== null;
@@ -253,11 +221,6 @@ export function CreateChatBoxContainer({
     if (!canSubmit || !effectiveProfileId || !executorConfig || !projectId)
       return;
 
-    // Save profile as default if toggle is checked
-    if (saveAsDefault && hasChangedFromDefault) {
-      await updateAndSaveConfig({ executor_profile: effectiveProfileId });
-    }
-
     const { title, description } = splitMessageToTitleDescription(message);
 
     await createWorkspace.mutateAsync({
@@ -273,7 +236,7 @@ export function CreateChatBoxContainer({
         executor_config: executorConfig,
         repos: repos.map((r) => ({
           repo_id: r.id,
-          target_branch: targetBranches[r.id] ?? 'main',
+          target_branch: targetBranches[r.id]!,
         })),
         linked_issue: linkedIssue
           ? {
@@ -305,9 +268,6 @@ export function CreateChatBoxContainer({
     getImageIds,
     clearAttachments,
     clearDraft,
-    saveAsDefault,
-    hasChangedFromDefault,
-    updateAndSaveConfig,
     linkedIssue,
   ]);
 
@@ -315,11 +275,13 @@ export function CreateChatBoxContainer({
   const displayError =
     hasAttemptedSubmit && repos.length === 0
       ? 'Add at least one repository to create a workspace'
-      : createWorkspace.error
-        ? createWorkspace.error instanceof Error
-          ? createWorkspace.error.message
-          : 'Failed to create workspace'
-        : null;
+      : hasAttemptedSubmit && !hasSelectedBranchesForAllRepos
+        ? 'Select a branch for every repository before creating a workspace'
+        : createWorkspace.error
+          ? createWorkspace.error instanceof Error
+            ? createWorkspace.error.message
+            : 'Failed to create workspace'
+          : null;
 
   // Wait for initial value to be applied before rendering
   // This ensures the editor mounts with content ready, so autoFocus works correctly
@@ -375,11 +337,6 @@ export function CreateChatBoxContainer({
                     selected: effectiveExecutor,
                     options: executorOptions,
                     onChange: handleExecutorChange,
-                  }}
-                  saveAsDefault={{
-                    checked: saveAsDefault,
-                    onChange: setSaveAsDefault,
-                    visible: hasChangedFromDefault,
                   }}
                   error={displayError}
                   repoIds={repos.map((r) => r.id)}
