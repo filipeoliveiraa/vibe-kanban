@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { Group, Layout, Panel, Separator } from 'react-resizable-panels';
 import { useWorkspaceContext } from '@/contexts/WorkspaceContext';
 import { usePageTitle } from '@/hooks/usePageTitle';
@@ -30,10 +31,12 @@ import {
 const WORKSPACES_GUIDE_ID = 'workspaces-guide';
 
 export function WorkspacesLayout() {
+  const navigate = useNavigate();
   const {
     workspaceId,
     workspace: selectedWorkspace,
     isLoading,
+    isError,
     isCreateMode,
     selectedSession,
     selectedSessionId,
@@ -41,7 +44,6 @@ export function WorkspacesLayout() {
     selectSession,
     repos,
     isNewSessionMode,
-    startNewSession,
   } = useWorkspaceContext();
 
   const { t } = useTranslation('common');
@@ -54,6 +56,13 @@ export function WorkspacesLayout() {
   const handleScrollToBottom = useCallback(() => {
     mainContainerRef.current?.scrollToBottom();
   }, []);
+
+  const handleWorkspaceCreated = useCallback(
+    (workspaceId: string) => {
+      navigate(`/workspaces/${workspaceId}`);
+    },
+    [navigate]
+  );
 
   // Use workspace-specific panel state (pass undefined when in create mode)
   const {
@@ -136,7 +145,9 @@ export function WorkspacesLayout() {
                 className="min-w-0 h-full overflow-hidden"
               >
                 {isCreateMode ? (
-                  <CreateChatBoxContainer onWorkspaceCreated={null} />
+                  <CreateChatBoxContainer
+                    onWorkspaceCreated={handleWorkspaceCreated}
+                  />
                 ) : (
                   <WorkspacesMainContainer
                     ref={mainContainerRef}
@@ -145,8 +156,8 @@ export function WorkspacesLayout() {
                     sessions={sessions}
                     onSelectSession={selectSession}
                     isLoading={isLoading}
+                    isError={isError}
                     isNewSessionMode={isNewSessionMode}
-                    onStartNewSession={startNewSession}
                   />
                 )}
               </Panel>
