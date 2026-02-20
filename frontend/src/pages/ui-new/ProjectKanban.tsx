@@ -29,7 +29,8 @@ import {
  */
 function ProjectMutationsRegistration({ children }: { children: ReactNode }) {
   const { registerProjectMutations } = useActions();
-  const { removeIssue, insertIssue, getIssue, issues } = useProjectContext();
+  const { removeIssue, insertIssue, getIssue, getAssigneesForIssue, issues } =
+    useProjectContext();
 
   // Use ref to always access latest issues (avoid stale closure)
   const issuesRef = useRef(issues);
@@ -72,12 +73,19 @@ function ProjectMutationsRegistration({ children }: { children: ReactNode }) {
         });
       },
       getIssue,
+      getAssigneesForIssue,
     });
 
     return () => {
       registerProjectMutations(null);
     };
-  }, [registerProjectMutations, removeIssue, insertIssue, getIssue]);
+  }, [
+    registerProjectMutations,
+    removeIssue,
+    insertIssue,
+    getIssue,
+    getAssigneesForIssue,
+  ]);
 
   return <>{children}</>;
 }
@@ -153,9 +161,7 @@ function ProjectKanbanInner({ projectId }: { projectId: string }) {
 
   const project = projects.find((p) => p.id === projectId);
 
-  // Only block on loading when we still haven't resolved this specific project.
-  // OrgContext loading also includes non-core streams (notifications, members).
-  if (isLoading && !project) {
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full w-full">
         <p className="text-low">{t('states.loading')}</p>
@@ -203,13 +209,8 @@ function useFindProjectById(projectId: string | undefined) {
   return {
     project,
     organizationId: project?.organization_id ?? selectedOrgId,
-    // Block only while project resolution is truly pending.
-    // If we already know the selected org or found the project, avoid waiting on
-    // unrelated org query state.
-    isLoading:
-      !authLoaded ||
-      (orgsLoading && !orgIdToUse) ||
-      (projectsLoading && !project),
+    // Include auth loading state - we can't determine project access until auth loads
+    isLoading: !authLoaded || orgsLoading || projectsLoading,
   };
 }
 
